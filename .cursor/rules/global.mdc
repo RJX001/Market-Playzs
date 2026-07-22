@@ -1,0 +1,24 @@
+---
+description: Marketplays global stack, conventions, enums — always load with Section 2
+alwaysApply: true
+---
+
+# Marketplays — Global
+
+**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 1** (Global) + **Section 2** (Deployment). Quick map: **Section 10**.
+
+## Stack (do not substitute)
+- Frontend: Next.js 15 App Router, shadcn/ui, Tailwind — `apps/web`
+- Backend: FastAPI on Vercel Python — `apps/api`
+- DB: Supabase (PostgreSQL + PostGIS)
+- Payments: Stripe Connect (Separate Charges and Transfers)
+- Mapping: Mapbox GL JS
+- Hosting: Vercel (`marketplays-web` + `marketplays-api`); DNS: Cloudflare **DNS-only** (grey cloud)
+
+## Conventions
+- Money in DB = integer **pence**; format £ only in UI
+- Booking status enum exact: `Pending_Payment`, `Confirmed`, `Live`, `Awaiting_Proof`, `Awaiting_Buyer_Review`, `Completed`, `Cancelled`, `Refunded`, `Disputed`, `Admin_Flagged`
+- Category enum exact: `sports_club`, `gym`, `school`, `shop`, `cafe`, `festival`, `community_event`, `billboard`, `event_venue`
+- Never commit secrets; Stripe secret / Supabase service role / Mapbox secret = server-only
+- Marketing = light mode; logged-in dashboards = dark mode
+- Deploy details: `docs/deployment.md`

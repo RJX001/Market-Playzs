@@ -1,0 +1,22 @@
+/** Buyer explore / campaigns visual tokens (redesign spec §2). */
+export const BuyerToken = {
+  primary: "#3B5BFF",
+  pageBg: "#05070C",
+  panel: "#0A0E16",
+  card: "#10141C",
+  input: "#171C26",
+  border: "#262C38",
+  borderSubtle: "#1D2330",
+  text: "#F5F6F8",
+  textSecondary: "#9AA3B2",
+  textTertiary: "#6B7280",
+  mapBase: "#E7E9EE",
+  mapGrid: "#D7DAE2",
+  mapBlock: "#DEE1E8",
+  pinAvailable: "#22C55E",
+  pinLimited: "#F5A623",
+  pinBooked: "#F1544B",
+  success: "#34D399",
+  amber: "#F5A623",
+  red: "#F1544B",
+} as const;

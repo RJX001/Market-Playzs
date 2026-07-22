@@ -1,0 +1,20 @@
+---
+description: Seller portal — revenue dashboard and publish guard
+globs:
+  - apps/web/src/app/(seller)/**
+  - apps/web/src/components/seller/**
+  - apps/web/src/app/**/dashboard/seller/**
+alwaysApply: false
+---
+
+# Marketplays — Seller Portal
+
+**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 7** (+ always **Sections 1–2**). Design tokens: **Section 3**. Booking transitions: **Section 5.2**.
+
+## Hard rules
+- Entry is **Revenue Dashboard** (`/dashboard/seller`), not My Listings
+- KPI order: Revenue (30d) → Active bookings → Avg CIS → Occupancy
+- Desktop grid 60/40: left = booking feed; right = chart + CIS + actions + payout
+- Status pills map 1:1 to Section 1.3 enum — no invented labels
+- Publish guard: Stripe Connect + required fields + ≥1 image
+- Seller may only Accept/Decline (request bookings) and Upload Proof; all other status changes are system-only

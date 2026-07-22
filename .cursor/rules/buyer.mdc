@@ -1,0 +1,22 @@
+---
+description: Buyer portal — map-first layout and filter rules
+globs:
+  - apps/web/src/app/(buyer)/**
+  - apps/web/src/components/buyer/**
+  - apps/web/src/app/**/map/**
+alwaysApply: false
+---
+
+# Marketplays — Buyer Portal
+
+**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 6** (+ always **Sections 1–2**). Design tokens: **Section 3**.
+
+## Hard rules
+- Entry is the **Live Map** (`/map` or `/dashboard/buyer`), not a list-first view
+- Pin colours from Section 3.1 tokens only; recalculate on every filter apply
+- Cluster click = zoom only; single unclustered pin opens slide-in panel
+- Map re-query: pan >25% viewport or zoom ≥2 levels, debounced 400ms
+- Slide-in ~300px from right; double-click → `/listings/[id]`
+- Filter order fixed: Location → Radius → Asset Type → Audience → Price → Availability → CIS → Booking Type
+- Cards show £/week (`price_per_day × 7`); daily rate only at booking confirmation
+- Do not invent booking status labels outside Section 1.3

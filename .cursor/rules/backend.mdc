@@ -1,0 +1,28 @@
+---
+description: FastAPI backend — security, Stripe, booking machine, CIS
+globs:
+  - apps/api/**
+alwaysApply: false
+---
+
+# Marketplays — Backend / API
+
+**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 5** (+ always **Sections 1–2**). Schema: **Section 4**. Deploy: **Section 2** / `docs/deployment.md`.
+
+## Entrypoint
+- FastAPI instance named `app` in `apps/api/app/main.py` (Vercel: `[tool.vercel] entrypoint`)
+- Fallback re-export: `apps/api/api/index.py`
+- Crons in `apps/api/vercel.json`: booking transitions `1 0 * * *`, availability extend `0 0 * * *`
+
+## Security (non-negotiable)
+- JWT access 15m / refresh 7d HttpOnly cookie; bcrypt cost ≥ 12
+- Role middleware on every protected route
+- Validate Stripe-Signature on all webhooks → 400 if invalid
+- SQLAlchemy ORM only — never interpolate user input into SQL
+- Login rate limit 5/IP/15min; uploads: MIME + size server-side
+
+## Domain
+- Booking transitions exactly as Section 5.2 — clients never PATCH `status` arbitrarily
+- CIS formula Section 5.3; money = integer pence
+- Filters: AND across types, OR within multi-select (Section 5.4)
+- Long-running work stays off Vercel Functions (Section 2.3)

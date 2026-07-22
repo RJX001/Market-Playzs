@@ -1,0 +1,17 @@
+---
+description: Admin portal — audit logs, disputes, CIS overrides
+globs:
+  - apps/web/src/app/(admin)/**
+  - apps/web/src/components/admin/**
+alwaysApply: false
+---
+
+# Marketplays — Admin Portal
+
+**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 8** (+ always **Sections 1–2**). Schema: **Section 4**. State machine: **Section 5.2**.
+
+## Hard rules
+- Every mutating admin action writes an `audit_logs` row — no silent mutations
+- CIS override sets `listings.is_cis_overridden = true` and shows an asterisk in admin UI
+- Dispute resolutions only: Approve Seller (full payout) | Full Refund | Partial Refund (%)
+- Suspended listings drop from buyer queries immediately; do not show suspension reason to sellers

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/booking-transitions",
+      "schedule": "1 0 * * *"
+    },
+    {
+      "path": "/api/cron/extend-availability",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}

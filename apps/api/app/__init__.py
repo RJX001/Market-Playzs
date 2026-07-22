@@ -1,0 +1,1 @@
+"""Marketplays FastAPI application package."""
