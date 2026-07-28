@@ -1,4 +1,9 @@
-"""Auth routes: register, login, refresh, logout."""
+"""Auth routes: register, login, refresh, logout.
+
+Live JWT/bcrypt provider — do not remove until Clerk cutover
+(docs/clerk-migration-plan.md). Roadmap Phase 1.1 targets Clerk as IdP;
+Section 5.1 RBAC/rate-limit principles still apply here.
+"""
 
 from __future__ import annotations
 

@@ -1,8 +1,12 @@
 """
 Auth dependencies for role guards on protected routes.
 
-Resolves Bearer JWT via Auth middleware (15min access). Refresh stays
+Resolves Bearer JWT via auth_service (15min access). Refresh stays
 HttpOnly-cookie-only on /api/auth/refresh — never accepted here.
+
+Clerk dual-mode: see docs/clerk-migration-plan.md and
+app.services.clerk_compat.resolve_authenticated_user (stub — do not cut over yet).
+Section 5.1 RBAC/rate-limit principles remain; provider target is Clerk.
 """
 
 from __future__ import annotations

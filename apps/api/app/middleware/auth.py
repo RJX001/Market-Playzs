@@ -3,6 +3,10 @@
 Buyer endpoints: buyer role only.
 Seller endpoints: seller role only.
 Admin endpoints: admin role only.
+
+Live path: HS256 access JWT (auth_service). Domain routers typically use
+app.api.deps.require_role instead — keep both in sync until Clerk cutover.
+Clerk stub: app.services.clerk_compat — docs/clerk-migration-plan.md.
 """
 
 from __future__ import annotations

@@ -5,7 +5,11 @@ alwaysApply: true
 
 # Marketplays — Global
 
-**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 1** (Global) + **Section 2** (Deployment). Quick map: **Section 10**.
+**Mechanics (source of truth):** `docs/marketplays_cursor_rules.md` **Section 1** (Global) + **Section 2** (Deployment). Quick map: **Section 10**.
+
+**Sequencing / priority:** `docs/marketplays_launch_roadmap.md` (stabilise-and-ship; Phase 1 MVP journeys first; AI agents / Nice-to-Have out of scope until launch-ready). Doc map: `docs/COMPATIBILITY.md`.
+
+**Auth:** Clerk per launch roadmap Conflicts — supersedes custom JWT/bcrypt for *authentication provider only*; keep server-side RBAC (buyer/seller/admin).
 
 ## Stack (do not substitute)
 - Frontend: Next.js 15 App Router, shadcn/ui, Tailwind — `apps/web`

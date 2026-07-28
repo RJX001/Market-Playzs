@@ -1,5 +1,5 @@
-"""Auth middleware placeholder — Auth agent owns JWT verification.
+"""Auth middleware package.
 
-Domain routes currently use app.api.deps require_role() stubs
-(X-User-Id / X-User-Role headers) until this module is wired.
+Live RBAC: app.api.deps.require_role + app.middleware.auth (JWT Bearer).
+Clerk target: docs/clerk-migration-plan.md, app.services.clerk_compat stub.
 """

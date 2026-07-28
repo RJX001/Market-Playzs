@@ -2,6 +2,8 @@
 
 Authoritative rules: `docs/marketplays_cursor_rules.md` **Section 2** (Deployment) and **Section 10** (Quick Reference).
 
+**Launch sequencing:** Work order and “what to ship before polish” live in `docs/marketplays_launch_roadmap.md` (Phase 1 journeys first; Phases 5–8 are hardening, not a reason to change hosting). Definition of done: `docs/launch-ready-definition.md`. This guide’s hosting decisions stay **Vercel** (`marketplays-web` + `marketplays-api`) with Cloudflare **DNS-only** (grey cloud) — do not enable proxy/CDN mode for app traffic.
+
 ---
 
 ## Architecture

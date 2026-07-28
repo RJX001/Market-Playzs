@@ -7,7 +7,11 @@ alwaysApply: false
 
 # Marketplays — Backend / API
 
-**Source of truth:** `docs/marketplays_cursor_rules.md` **Section 5** (+ always **Sections 1–2**). Schema: **Section 4**. Deploy: **Section 2** / `docs/deployment.md`.
+**Mechanics (source of truth):** `docs/marketplays_cursor_rules.md` **Section 5** (+ always **Sections 1–2**). Schema: **Section 4**. Deploy: **Section 2** / `docs/deployment.md`.
+
+**Sequencing / priority:** `docs/marketplays_launch_roadmap.md` (Phase 1 MVP first; AI agents / Nice-to-Have out of scope until launch-ready). Doc map: `docs/COMPATIBILITY.md`.
+
+**Auth:** Clerk per launch roadmap Conflicts — supersedes JWT/bcrypt bullets in rules Section 5.1 for *authentication provider only*. RBAC unchanged: gate buyer/seller/admin on every protected route (Clerk session/role claims replace JWT role claim).
 
 ## Entrypoint
 - FastAPI instance named `app` in `apps/api/app/main.py` (Vercel: `[tool.vercel] entrypoint`)
@@ -15,11 +19,11 @@ alwaysApply: false
 - Crons in `apps/api/vercel.json`: booking transitions `1 0 * * *`, availability extend `0 0 * * *`
 
 ## Security (non-negotiable)
-- JWT access 15m / refresh 7d HttpOnly cookie; bcrypt cost ≥ 12
-- Role middleware on every protected route
+- Auth provider: **Clerk** (not custom JWT/bcrypt) — verify Clerk session / claims server-side
+- Role middleware on every protected route (RBAC principle unchanged)
 - Validate Stripe-Signature on all webhooks → 400 if invalid
 - SQLAlchemy ORM only — never interpolate user input into SQL
-- Login rate limit 5/IP/15min; uploads: MIME + size server-side
+- Auth/login abuse controls + uploads: MIME + size server-side
 
 ## Domain
 - Booking transitions exactly as Section 5.2 — clients never PATCH `status` arbitrarily
