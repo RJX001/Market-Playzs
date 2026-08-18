@@ -2,7 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CATEGORY_LABELS, penceToPoundsDisplay } from "@marketplays/shared";
 import { CISBadge } from "@/components/shared/CISBadge";
-import { getMockListingById } from "@/components/buyer/mock-listings";
+import {
+  fetchListingAvailability,
+  fetchListingById,
+  fetchListingReviews,
+} from "@/components/buyer/listing-api";
+import { ListingDetailActions } from "@/components/buyer/listing-detail-actions";
+import { isoDate } from "@/components/buyer/listing-mapper";
 import { formatWeeklyPriceFromDailyPence } from "@/components/buyer/price";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,7 +19,7 @@ interface ListingDetailPageProps {
 
 export async function generateMetadata({ params }: ListingDetailPageProps) {
   const { id } = await params;
-  const listing = getMockListingById(id);
+  const { listing } = await fetchListingById(id);
   if (!listing) {
     return { title: "Listing · MarketPlays" };
   }
@@ -28,8 +34,18 @@ export default async function ListingDetailPage({
   params,
 }: ListingDetailPageProps) {
   const { id } = await params;
-  const listing = getMockListingById(id);
+  const [{ listing, error, source }, reviewsResult, availabilityResult] =
+    await Promise.all([
+      fetchListingById(id),
+      fetchListingReviews(id),
+      fetchListingAvailability(id, isoDate(0), isoDate(19)),
+    ]);
   if (!listing) notFound();
+
+  const startDate = isoDate(0);
+  const endDate = isoDate(19);
+  const reviews = reviewsResult.reviews;
+  const days = availabilityResult.days;
 
   return (
     <div className="min-h-screen bg-white text-zinc-900">
@@ -49,7 +65,23 @@ export default async function ListingDetailPage({
       </header>
 
       <article className="mx-auto max-w-5xl px-4 py-10">
-        <div className="aspect-[21/9] rounded-xl bg-zinc-100" aria-hidden />
+        {error ? (
+          <p className="mb-4 text-sm text-red-600" role="alert">
+            {error}
+            {source === "mock" ? " Showing mock listing data." : ""}
+          </p>
+        ) : null}
+
+        {listing.imageUrls[0] ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={listing.imageUrls[0]}
+            alt=""
+            className="aspect-[21/9] w-full rounded-xl bg-zinc-100 object-cover"
+          />
+        ) : (
+          <div className="aspect-[21/9] rounded-xl bg-zinc-100" aria-hidden />
+        )}
 
         <div className="mt-6 flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -60,7 +92,8 @@ export default async function ListingDetailPage({
               {listing.title}
             </h1>
             <p className="mt-2 text-zinc-600">
-              {listing.addressLine1}, {listing.postcode}
+              {listing.addressLine1}
+              {listing.postcode ? `, ${listing.postcode}` : ""}
             </p>
           </div>
           <CISBadge score={listing.cisScore} />
@@ -82,6 +115,52 @@ export default async function ListingDetailPage({
                 </span>
               ))}
             </div>
+
+            <h2 className="pt-4 text-lg font-medium">Availability</h2>
+            {availabilityResult.error ? (
+              <p className="text-sm text-red-600" role="alert">
+                {availabilityResult.error}
+              </p>
+            ) : days.length === 0 ? (
+              <p className="text-sm text-zinc-600">
+                No availability rows returned for the next 20 days.
+              </p>
+            ) : (
+              <ul className="space-y-1 text-sm text-zinc-700">
+                {days.slice(0, 20).map((day) => (
+                  <li key={day.day}>
+                    {day.day}: {day.is_locked ? "locked" : "available"}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <h2 className="pt-4 text-lg font-medium">Reviews</h2>
+            {reviewsResult.error ? (
+              <p className="text-sm text-red-600" role="alert">
+                {reviewsResult.error}
+              </p>
+            ) : reviews.length === 0 ? (
+              <p className="text-sm text-zinc-600">No reviews yet.</p>
+            ) : (
+              <ul className="space-y-3">
+                {reviews.map((review, idx) => (
+                  <li
+                    key={review.id ?? `review-${idx}`}
+                    className="rounded-md border border-zinc-200 bg-zinc-50 p-3"
+                  >
+                    <p className="text-sm font-medium text-zinc-800">
+                      {review.rating}/5
+                    </p>
+                    {review.comment ? (
+                      <p className="mt-1 text-sm text-zinc-600">
+                        {review.comment}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <aside className="h-fit rounded-xl border border-zinc-200 bg-zinc-50 p-5">
@@ -98,14 +177,11 @@ export default async function ListingDetailPage({
             <p className="mt-1 text-sm capitalize text-zinc-600">
               {listing.bookingType} booking · {listing.availability}
             </p>
-            <Link
-              href="/map"
-              className={cn(buttonVariants({ size: "lg" }), "mt-6 w-full")}
-            >
-              {listing.bookingType === "instant"
-                ? "Instant book on map"
-                : "Request on map"}
-            </Link>
+            <ListingDetailActions
+              listing={listing}
+              startDate={startDate}
+              endDate={endDate}
+            />
           </aside>
         </div>
       </article>

@@ -1,7 +1,28 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import { DisputeList } from "@/components/admin/dispute-list";
-import { STUB_DISPUTES } from "@/components/admin/stub-data";
+import { getAdminDisputes } from "@/components/admin/admin-api";
+import { STUB_DISPUTES, type AdminDispute } from "@/components/admin/stub-data";
 
 export default function AdminDisputesPage() {
+  const [disputes, setDisputes] = useState<AdminDispute[]>(STUB_DISPUTES);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await getAdminDisputes();
+        if (!cancelled && items) setDisputes(items);
+      } catch {
+        /* keep stubs */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
       <div>
@@ -15,7 +36,7 @@ export default function AdminDisputesPage() {
         </p>
       </div>
 
-      <DisputeList disputes={STUB_DISPUTES} />
+      <DisputeList disputes={disputes} />
     </div>
   );
 }

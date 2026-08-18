@@ -31,20 +31,19 @@ export function CisOverridePanel({ listing, onApplied }: CisOverridePanelProps) 
 
     startTransition(async () => {
       setMessage(null);
-      // TODO: real /api/admin/listings/{id}/cis-override
-      // Server must set is_cis_overridden = true AND write audit_logs
-      const result = await overrideCis({
-        listingId: listing.id,
-        cisScore: score,
-      });
-      setOverridden(true);
-      setDisplayScore(score);
-      onApplied?.(score);
-      setMessage(
-        result.stub
-          ? `Stub OK: ${result.path} — is_cis_overridden=true; audit_logs row will be written by API.`
-          : "CIS overridden.",
-      );
+      try {
+        await overrideCis({
+          listingId: listing.id,
+          cisScore: score,
+          reason: "Admin CIS override",
+        });
+        setOverridden(true);
+        setDisplayScore(score);
+        onApplied?.(score);
+        setMessage("CIS overridden.");
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "CIS override failed.");
+      }
     });
   }
 

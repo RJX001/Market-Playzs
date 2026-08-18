@@ -6,7 +6,8 @@ domain actions (review, proof upload), or explicit admin overrides.
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 
 from app.domain_enums import (
     DELIVERY_SCORES,
@@ -14,6 +15,7 @@ from app.domain_enums import (
     VALID_TRANSITIONS,
     BookingStatus,
     ListingStatus,
+    UserRole,
 )
 from app.repositories.memory_store import (
     BookingRecord,
@@ -22,9 +24,42 @@ from app.repositories.memory_store import (
     store,
 )
 from app.services import cis_service, notification_service, stripe_service
+from app.services.refund_policy import calculate_refund_pence
 
 # Default platform commission rate (10%) — TODO: make configurable per admin
 DEFAULT_COMMISSION_RATE = 0.10
+
+PENDING_PAYMENT_TTL = timedelta(minutes=15)
+PROOF_TIMEOUT = timedelta(hours=48)
+REVIEW_AUTO_APPROVE = timedelta(hours=72)
+AUTO_APPROVE_RATING = 3
+# Proof is already uploaded by the time the booking is Awaiting_Buyer_Review.
+AUTO_APPROVE_DELIVERY_SCORE = 1.0
+
+
+@dataclass(frozen=True)
+class CancelResult:
+    booking: BookingRecord
+    refund_pence: int
+    refund_percent: int
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _list_all_bookings() -> list[BookingRecord]:
+    return [
+        rec
+        for bid in list(store.bookings)
+        if (rec := store.get_booking(bid)) is not None
+    ]
 
 
 class InvalidTransitionError(ValueError):
@@ -243,4 +278,221 @@ def report_issue(booking_id: str, buyer_id: str) -> BookingRecord:
         raise BookingServiceError("Only the booking buyer may report an issue")
     return transition(
         booking_id, BookingStatus.DISPUTED, actor=f"buyer:{buyer_id}"
+    )
+
+
+def release_abandoned_pending_payment(
+    *, now: datetime | None = None
+) -> list[BookingRecord]:
+    """Cancel Pending_Payment bookings older than 15 minutes and unlock dates."""
+    now = now or _utcnow()
+    released: list[BookingRecord] = []
+    for booking in _list_all_bookings():
+        if booking.status != BookingStatus.PENDING_PAYMENT:
+            continue
+        age = now - _as_utc(booking.created_at)
+        if age < PENDING_PAYMENT_TTL:
+            continue
+        released.append(
+            transition(
+                booking.id,
+                BookingStatus.CANCELLED,
+                actor="cron:abandonment",
+            )
+        )
+    return released
+
+
+def run_confirmed_to_live(*, today: date | None = None) -> list[BookingRecord]:
+    """Confirmed → Live when campaign start_date is reached (daily cron 00:01)."""
+    today = today or date.today()
+    moved: list[BookingRecord] = []
+    for booking in _list_all_bookings():
+        if booking.status != BookingStatus.CONFIRMED:
+            continue
+        if booking.start_date > today:
+            continue
+        moved.append(
+            transition(booking.id, BookingStatus.LIVE, actor="cron:start_date")
+        )
+    return moved
+
+
+def run_live_to_awaiting_proof(*, today: date | None = None) -> list[BookingRecord]:
+    """Live → Awaiting_Proof after campaign end_date (daily cron)."""
+    today = today or date.today()
+    moved: list[BookingRecord] = []
+    for booking in _list_all_bookings():
+        if booking.status != BookingStatus.LIVE:
+            continue
+        if booking.end_date >= today:
+            continue
+        moved.append(
+            transition(
+                booking.id,
+                BookingStatus.AWAITING_PROOF,
+                actor="cron:end_date",
+            )
+        )
+    return moved
+
+
+def flag_stale_awaiting_proof(
+    *, now: datetime | None = None
+) -> list[BookingRecord]:
+    """Awaiting_Proof → Admin_Flagged after 48 hours with no proof."""
+    now = now or _utcnow()
+    flagged: list[BookingRecord] = []
+    for booking in _list_all_bookings():
+        if booking.status != BookingStatus.AWAITING_PROOF:
+            continue
+        if now - _as_utc(booking.updated_at) < PROOF_TIMEOUT:
+            continue
+        flagged.append(
+            transition(
+                booking.id,
+                BookingStatus.ADMIN_FLAGGED,
+                actor="cron:proof_timeout",
+            )
+        )
+    return flagged
+
+
+def auto_approve_stale_reviews(
+    *, now: datetime | None = None
+) -> list[BookingRecord]:
+    """Awaiting_Buyer_Review → Completed after 72 hours; rating defaults to 3."""
+    now = now or _utcnow()
+    completed: list[BookingRecord] = []
+    for booking in _list_all_bookings():
+        if booking.status != BookingStatus.AWAITING_BUYER_REVIEW:
+            continue
+        if now - _as_utc(booking.updated_at) < REVIEW_AUTO_APPROVE:
+            continue
+
+        delivery = (
+            booking.delivery_score
+            if booking.delivery_score in DELIVERY_SCORES
+            else AUTO_APPROVE_DELIVERY_SCORE
+        )
+        rating = AUTO_APPROVE_RATING
+        booking_cis = cis_service.compute_booking_cis(delivery, rating)
+        store.update_booking(
+            booking.id,
+            rating=rating,
+            delivery_score=delivery,
+            booking_cis=booking_cis,
+        )
+        store.create_review(
+            ReviewRecord(
+                id=new_id(),
+                booking_id=booking.id,
+                listing_id=booking.listing_id,
+                buyer_id=booking.buyer_id,
+                rating=rating,
+                delivery_score=delivery,
+            )
+        )
+        completed.append(
+            transition(
+                booking.id,
+                BookingStatus.COMPLETED,
+                actor="cron:auto-approve",
+            )
+        )
+        cis_service.recalculate_listing_cis(booking.listing_id)
+    return completed
+
+
+def run_daily_transitions(
+    *,
+    today: date | None = None,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Daily cron entrypoint: date-based transitions plus 48h/72h timeouts."""
+    today = today or date.today()
+    now = now or _utcnow()
+    confirmed_to_live = run_confirmed_to_live(today=today)
+    live_to_proof = run_live_to_awaiting_proof(today=today)
+    proof_flagged = flag_stale_awaiting_proof(now=now)
+    auto_approved = auto_approve_stale_reviews(now=now)
+    return {
+        "confirmed_to_live": len(confirmed_to_live),
+        "live_to_awaiting_proof": len(live_to_proof),
+        "proof_timeout_flagged": len(proof_flagged),
+        "reviews_auto_approved": len(auto_approved),
+    }
+
+
+def cancel_booking(
+    *,
+    booking_id: str,
+    actor_id: str,
+    actor_role: UserRole,
+    today: date | None = None,
+) -> CancelResult:
+    """
+    Buyer or seller cancels pre-start.
+
+    Pending_Payment → Cancelled (no Stripe refund; payment never succeeded).
+    Confirmed → Cancelled with refund per ``refund_policy``. Any positive
+    refund (100% or 50%) calls ``stripe_service.refund_payment`` with
+    ``amount_pence``.
+    """
+    today = today or date.today()
+    booking = store.get_booking(booking_id)
+    if not booking:
+        raise BookingServiceError("Booking not found")
+
+    if actor_role == UserRole.BUYER:
+        if booking.buyer_id != actor_id:
+            raise BookingServiceError(
+                "Only the booking buyer may cancel this booking"
+            )
+        cancelled_by = "buyer"
+    elif actor_role == UserRole.SELLER:
+        if booking.seller_id != actor_id:
+            raise BookingServiceError(
+                "Only the listing seller may cancel this booking"
+            )
+        cancelled_by = "seller"
+    else:
+        raise BookingServiceError("Only the buyer or seller may cancel a booking")
+
+    if booking.status not in {
+        BookingStatus.PENDING_PAYMENT,
+        BookingStatus.CONFIRMED,
+    }:
+        raise BookingServiceError(
+            f"Cannot cancel booking in status {booking.status.value}"
+        )
+
+    if (
+        booking.status == BookingStatus.CONFIRMED
+        and booking.start_date <= today
+    ):
+        raise BookingServiceError("Cannot cancel after campaign start")
+
+    refund_pence, percent = calculate_refund_pence(
+        total_pence=booking.total_pence,
+        cancelled_by=cancelled_by,
+        start_date=booking.start_date,
+        today=today,
+    )
+    if booking.status == BookingStatus.PENDING_PAYMENT:
+        refund_pence, percent = 0, 0
+
+    paid = booking.status == BookingStatus.CONFIRMED
+    if paid and refund_pence > 0 and booking.stripe_payment_intent_id:
+        stripe_service.refund_payment(booking, amount_pence=refund_pence)
+
+    updated = transition(
+        booking_id,
+        BookingStatus.CANCELLED,
+        actor=f"{actor_role.value}:{actor_id}",
+    )
+    return CancelResult(
+        booking=updated,
+        refund_pence=refund_pence,
+        refund_percent=percent,
     )

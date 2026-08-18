@@ -25,16 +25,16 @@ export function UsersTable({ users }: UsersTableProps) {
 
     startTransition(async () => {
       setMessage(null);
-      // TODO: real /api/admin/users/{id}/suspend — server writes audit_logs
-      const result = await suspendUser({
-        userId: selected.id,
-        reason: reason.trim(),
-      });
-      setMessage(
-        result.stub
-          ? `Stub OK: ${result.path} (audit_logs row will be written by API).`
-          : "User suspended.",
-      );
+      try {
+        await suspendUser({
+          userId: selected.id,
+          reason: reason.trim(),
+        });
+        setMessage("User suspended.");
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Suspend failed.");
+        return;
+      }
       setSelectedId(null);
       setReason("");
     });

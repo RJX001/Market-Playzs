@@ -11,6 +11,8 @@ export interface AdminDispute {
   reason: string;
   openedAt: string;
   status: "open" | "resolved";
+  /** B10 SLA: 72h countdown from dispute creation */
+  firstDecisionDueAt?: string;
 }
 
 export interface AdminUser {

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { resolvePinColour } from "@/components/buyer/pin-colour";
 import { formatWeeklyPriceFromDailyPence } from "@/components/buyer/price";
 import { BuyerToken } from "@/components/buyer/buyer-tokens";
-import type { BuyerListing } from "@/components/buyer/types";
+import type { BuyerListing, MapBBox } from "@/components/buyer/types";
 import { useMap } from "@/hooks/useMap";
 import { cn } from "@/lib/utils";
 
@@ -41,6 +41,7 @@ export interface BuyerMapCanvasProps {
   listings: BuyerListing[];
   selectedId: string | null;
   onPinClick: (listingId: string) => void;
+  onViewportChange?: (bbox: MapBBox, zoom: number) => void;
   className?: string;
   /** Hide internal legend when parent renders its own overlays. */
   showLegend?: boolean;
@@ -50,6 +51,7 @@ export function BuyerMapCanvas({
   listings,
   selectedId,
   onPinClick,
+  onViewportChange,
   className,
   showLegend = true,
 }: BuyerMapCanvasProps) {
@@ -66,6 +68,7 @@ export function BuyerMapCanvas({
     onPinDoubleClick: (id) => {
       router.push(`/listings/${id}`);
     },
+    onViewportChange,
   });
 
   const fallbackPins: ProjectedPin[] = useMemo(() => {

@@ -1,7 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
+import {
+  listConversations,
+  listMessages,
+  sendMessage,
+  type ConversationMessageDto,
+  type ConversationThreadDto,
+} from "@/components/messages/messages-api";
 import {
   STUB_THREADS,
   type Message,
@@ -18,29 +25,94 @@ function formatThreadTime(iso: string): string {
   });
 }
 
+function toThread(
+  dto: ConversationThreadDto,
+  messages: Message[] = [],
+): MessageThread {
+  return {
+    id: dto.id,
+    counterpartName: dto.counterpartName,
+    listingTitle: dto.listingTitle,
+    lastPreview: dto.lastPreview,
+    updatedAt: dto.updatedAt,
+    unread: dto.unread,
+    messages,
+  };
+}
+
+function toMessage(dto: ConversationMessageDto): Message {
+  return {
+    id: dto.id,
+    fromSelf: dto.fromSelf,
+    body: dto.body,
+    sentAt: dto.sentAt,
+  };
+}
+
 /**
  * Section 12 — two-column messages: thread list + conversation.
- * Stub local state; swap STUB_THREADS for API later.
  */
 export function MessagesPageClient() {
   const [threads, setThreads] = useState<MessageThread[]>(STUB_THREADS);
   const [activeId, setActiveId] = useState(STUB_THREADS[0]?.id ?? "");
   const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
 
   const active = threads.find((t) => t.id === activeId) ?? null;
 
-  function selectThread(id: string) {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const convos = await listConversations();
+        if (cancelled || convos.length === 0) return;
+        const mapped = convos.map((c) => toThread(c));
+        setThreads(mapped);
+        const firstId = mapped[0]?.id ?? "";
+        setActiveId(firstId);
+        if (firstId) {
+          const msgs = await listMessages(firstId);
+          if (cancelled) return;
+          setThreads((prev) =>
+            prev.map((t) =>
+              t.id === firstId ? { ...t, messages: msgs.map(toMessage), unread: false } : t,
+            ),
+          );
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : "Could not load messages.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function selectThread(id: string) {
     setActiveId(id);
     setThreads((prev) =>
       prev.map((t) => (t.id === id ? { ...t, unread: false } : t)),
     );
+    try {
+      const msgs = await listMessages(id);
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === id ? { ...t, messages: msgs.map(toMessage) } : t,
+        ),
+      );
+    } catch {
+      /* keep existing messages */
+    }
   }
 
-  function sendMessage() {
+  async function send() {
     const body = draft.trim();
     if (!body || !active) return;
 
-    const next: Message = {
+    const optimistic: Message = {
       id: `msg_local_${Date.now()}`,
       fromSelf: true,
       body,
@@ -53,13 +125,36 @@ export function MessagesPageClient() {
           ? {
               ...t,
               lastPreview: body,
-              updatedAt: next.sentAt,
-              messages: [...t.messages, next],
+              updatedAt: optimistic.sentAt,
+              messages: [...t.messages, optimistic],
             }
           : t,
       ),
     );
     setDraft("");
+    setSending(true);
+    setError(null);
+    try {
+      const saved = await sendMessage(active.id, body);
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === active.id
+            ? {
+                ...t,
+                lastPreview: saved.body,
+                updatedAt: saved.sentAt,
+                messages: t.messages.map((m) =>
+                  m.id === optimistic.id ? toMessage(saved) : m,
+                ),
+              }
+            : t,
+        ),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not send message.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -71,6 +166,11 @@ export function MessagesPageClient() {
         <p className="mt-1 text-[13px] text-[#9AA3B2]">
           Buyer ↔ seller threads for active bookings.
         </p>
+        {error ? (
+          <p className="mt-1 text-[13px] text-[#F1544B]" role="alert">
+            {error}
+          </p>
+        ) : null}
       </div>
 
       <div className="grid min-h-0 flex-1 overflow-hidden rounded-[14px] border border-[#262C38] bg-[#10141C] lg:grid-cols-[320px_1fr]">
@@ -172,7 +272,7 @@ export function MessagesPageClient() {
                 className="flex shrink-0 gap-2 border-t border-[#1D2330] p-4"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  sendMessage();
+                  void send();
                 }}
               >
                 <input
@@ -185,7 +285,7 @@ export function MessagesPageClient() {
                 />
                 <button
                   type="submit"
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() || sending}
                   className="h-10 rounded-[9px] bg-[#3B5BFF] px-4 text-[13.5px] font-semibold text-white transition-opacity disabled:opacity-40"
                 >
                   Send

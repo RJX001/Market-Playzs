@@ -1,15 +1,19 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CATEGORY_LABELS, penceToPoundsDisplay } from "@marketplays/shared";
 import { CISBadge } from "@/components/shared/CISBadge";
+import { listSellerListings, mapSellerListing } from "@/components/seller/seller-api";
 import {
   sellerCardClass,
   sellerOutlineBtnClass,
   sellerPrimaryBtnClass,
 } from "@/components/seller/seller-styles";
-import { SELLER_LISTINGS } from "@/components/seller/stub-data";
+import { SELLER_LISTINGS, type SellerListingStub } from "@/components/seller/stub-data";
 
 const LISTING_STATUS_LABEL: Record<
-  (typeof SELLER_LISTINGS)[number]["status"],
+  SellerListingStub["status"],
   string
 > = {
   draft: "Draft",
@@ -18,7 +22,7 @@ const LISTING_STATUS_LABEL: Record<
 };
 
 const LISTING_STATUS_STYLE: Record<
-  (typeof SELLER_LISTINGS)[number]["status"],
+  SellerListingStub["status"],
   string
 > = {
   published:
@@ -29,6 +33,30 @@ const LISTING_STATUS_STYLE: Record<
 
 /** My listings — Section 9. */
 export default function SellerListingsPage() {
+  const [listings, setListings] = useState<SellerListingStub[]>(SELLER_LISTINGS);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await listSellerListings();
+        if (!cancelled && items.length > 0) {
+          setListings(items.map(mapSellerListing));
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Could not load listings.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -45,8 +73,14 @@ export default function SellerListingsPage() {
         </Link>
       </div>
 
+      {error ? (
+        <p className="text-[13px] text-[#F1544B]" role="alert">
+          {error}
+        </p>
+      ) : null}
+
       <ul className="space-y-3">
-        {SELLER_LISTINGS.map((listing) => (
+        {listings.map((listing) => (
           <li key={listing.id}>
             <div
               className={`${sellerCardClass} flex flex-wrap items-center justify-between gap-4 px-5 py-[18px]`}

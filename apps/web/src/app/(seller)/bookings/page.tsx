@@ -1,19 +1,106 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { BookingStatus, penceToPoundsDisplay } from "@marketplays/shared";
 import { BookingStatusBadge } from "@/components/shared/BookingStatusBadge";
+import {
+  declineBooking,
+  listSellerBookings,
+  SellerApiError,
+  uploadBookingProof,
+  uploadMedia,
+} from "@/components/seller/seller-api";
 import {
   sellerCardClass,
   sellerOutlineBtnClass,
   sellerPrimaryBtnClass,
 } from "@/components/seller/seller-styles";
-import { SELLER_BOOKING_FEED } from "@/components/seller/stub-data";
+import {
+  SELLER_BOOKING_FEED,
+  type SellerBookingActivity,
+} from "@/components/seller/stub-data";
 
 /**
  * Seller bookings (Section 11) — Accept / Decline / Upload proof only.
  * Status labels are sentence-case via BOOKING_STATUS_LABELS; enum unchanged.
  */
 export default function SellerBookingsPage() {
+  const [bookings, setBookings] = useState<SellerBookingActivity[]>(
+    SELLER_BOOKING_FEED,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [proofTargetId, setProofTargetId] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await listSellerBookings();
+        if (!cancelled && items.length > 0) setBookings(items);
+      } catch (err) {
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Could not load bookings.",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function refresh() {
+    const items = await listSellerBookings();
+    if (items.length > 0) setBookings(items);
+  }
+
+  async function onDecline(id: string) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await declineBooking(id);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof SellerApiError ? err.message : "Decline failed.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onProofFile(file: File | undefined) {
+    const bookingId = proofTargetId;
+    setProofTargetId(null);
+    if (!file || !bookingId) return;
+    setBusyId(bookingId);
+    setError(null);
+    try {
+      const url = await uploadMedia(file, "proof");
+      await uploadBookingProof(bookingId, url);
+      setBookings((prev) =>
+        prev.map((b) =>
+          b.id === bookingId
+            ? {
+                ...b,
+                proofUrl: url,
+                status: BookingStatus.Awaiting_Buyer_Review,
+              }
+            : b,
+        ),
+      );
+      await refresh();
+    } catch (err) {
+      setError(
+        err instanceof SellerApiError ? err.message : "Proof upload failed.",
+      );
+    } finally {
+      setBusyId(null);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -25,14 +112,30 @@ export default function SellerBookingsPage() {
         </p>
       </div>
 
+      {error ? (
+        <p className="text-[13px] text-[#F1544B]" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={(e) => onProofFile(e.target.files?.[0])}
+      />
+
       <ul className="space-y-3">
-        {SELLER_BOOKING_FEED.map((booking) => {
+        {bookings.map((booking) => {
           // Request-to-book stubs use Pending_Payment as the actionable seller gate.
-          const showAcceptDecline =
-            booking.status === BookingStatus.Pending_Payment;
+          const showCancel =
+            booking.status === BookingStatus.Pending_Payment ||
+            booking.status === BookingStatus.Confirmed;
           const showUploadProof =
             booking.status === BookingStatus.Awaiting_Proof;
           const hasProof = Boolean(booking.proofUrl);
+          const busy = busyId === booking.id;
 
           return (
             <li key={booking.id}>
@@ -72,29 +175,25 @@ export default function SellerBookingsPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  {showAcceptDecline ? (
-                    <>
-                      <button
-                        type="button"
-                        className={`${sellerPrimaryBtnClass} h-8 px-3 text-xs`}
-                        disabled
-                      >
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        className={`${sellerOutlineBtnClass} h-8 px-3 text-xs`}
-                        disabled
-                      >
-                        Decline
-                      </button>
-                    </>
+                  {showCancel ? (
+                    <button
+                      type="button"
+                      className={`${sellerOutlineBtnClass} h-8 px-3 text-xs`}
+                      disabled={busy}
+                      onClick={() => onDecline(booking.id)}
+                    >
+                      Cancel
+                    </button>
                   ) : null}
                   {showUploadProof && !hasProof ? (
                     <button
                       type="button"
                       className={`${sellerPrimaryBtnClass} h-8 px-3 text-xs`}
-                      disabled
+                      disabled={busy}
+                      onClick={() => {
+                        setProofTargetId(booking.id);
+                        fileRef.current?.click();
+                      }}
                     >
                       Upload proof
                     </button>

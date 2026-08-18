@@ -36,6 +36,8 @@ class UserResponse(BaseModel):
     full_name: str
     company_name: str | None = None
     phone: str | None = None
+    phone_verified: bool = False
+    email_verified_at: datetime | None = None
     is_suspended: bool = False
     created_at: datetime | None = None
 
@@ -51,3 +53,28 @@ class AccessTokenResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class EmailVerifyRequest(BaseModel):
+    email: EmailStr
+
+
+class EmailVerifyConfirmRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=4096)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class PhoneVerifyRequest(BaseModel):
+    phone: str | None = Field(default=None, min_length=7, max_length=64)
+
+
+class PhoneVerifyConfirmRequest(BaseModel):
+    code: str = Field(min_length=4, max_length=10)

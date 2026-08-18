@@ -43,6 +43,11 @@ class BookingResponse(BaseModel):
     updated_at: datetime
 
 
+class BookingListResponse(BaseModel):
+    items: list[BookingResponse]
+    total: int
+
+
 class ReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     delivery_score: float = Field(description="Exactly 0, 0.5, or 1")

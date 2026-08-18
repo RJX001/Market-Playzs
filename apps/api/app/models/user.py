@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, DateTime, String, Text, false
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +39,12 @@ class User(Base, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    phone_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     is_suspended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Stripe Connect (sellers) — Separate Charges and Transfers

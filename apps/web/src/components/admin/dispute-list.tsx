@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { AuditNotice } from "@/components/admin/audit-notice";
 import {
+  getAdminDisputes,
   resolveDispute,
   type DisputeResolutionAction,
 } from "@/components/admin/admin-api";
@@ -10,7 +11,7 @@ import { formatPence } from "@/components/admin/format-money";
 import type { AdminDispute } from "@/components/admin/stub-data";
 
 interface DisputeListProps {
-  disputes: AdminDispute[];
+  disputes?: AdminDispute[];
 }
 
 const ACTIONS: {
@@ -35,7 +36,39 @@ const ACTIONS: {
   },
 ];
 
-export function DisputeList({ disputes }: DisputeListProps) {
+function slaCountdown(iso?: string): string | null {
+  if (!iso) return null;
+  const due = new Date(iso).getTime();
+  if (Number.isNaN(due)) return null;
+  const ms = due - Date.now();
+  if (ms <= 0) return "SLA overdue";
+  const hours = Math.floor(ms / 3_600_000);
+  const mins = Math.floor((ms % 3_600_000) / 60_000);
+  return `${hours}h ${mins}m to first decision`;
+}
+
+export function DisputeList({ disputes: initial }: DisputeListProps) {
+  const [disputes, setDisputes] = useState<AdminDispute[]>(initial ?? []);
+
+  useEffect(() => {
+    if (initial && initial.length > 0) setDisputes(initial);
+  }, [initial]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const items = await getAdminDisputes();
+        if (!cancelled && items) setDisputes(items);
+      } catch {
+        /* keep initial / stubs */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const open = disputes.filter((d) => d.status === "open");
 
   if (open.length === 0) {
@@ -48,18 +81,35 @@ export function DisputeList({ disputes }: DisputeListProps) {
     <ul className="flex flex-col gap-4">
       {open.map((dispute) => (
         <li key={dispute.id}>
-          <DisputeCard dispute={dispute} />
+          <DisputeCard
+            dispute={dispute}
+            onResolved={() =>
+              setDisputes((prev) =>
+                prev.map((d) =>
+                  d.id === dispute.id ? { ...d, status: "resolved" } : d,
+                ),
+              )
+            }
+          />
         </li>
       ))}
     </ul>
   );
 }
 
-function DisputeCard({ dispute }: { dispute: AdminDispute }) {
+function DisputeCard({
+  dispute,
+  onResolved,
+}: {
+  dispute: AdminDispute;
+  onResolved: () => void;
+}) {
   const [action, setAction] = useState<DisputeResolutionAction | null>(null);
   const [refundPercent, setRefundPercent] = useState(50);
+  const [reason, setReason] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const sla = slaCountdown(dispute.firstDecisionDueAt);
 
   function handleResolve() {
     if (!action) return;
@@ -67,20 +117,25 @@ function DisputeCard({ dispute }: { dispute: AdminDispute }) {
       setMessage("Partial refund requires a custom % between 1 and 99.");
       return;
     }
+    const reasonText =
+      reason.trim() ||
+      ACTIONS.find((a) => a.id === action)?.label ||
+      action;
 
     startTransition(async () => {
       setMessage(null);
-      // TODO: real /api/admin/disputes/{id}/resolve — server writes audit_logs
-      const result = await resolveDispute({
-        disputeId: dispute.id,
-        action,
-        refundPercent: action === "partial_refund" ? refundPercent : undefined,
-      });
-      setMessage(
-        result.stub
-          ? `Stub OK: ${result.path} (audit_logs row will be written by API).`
-          : "Resolved.",
-      );
+      try {
+        const result = await resolveDispute({
+          bookingId: dispute.bookingId,
+          action,
+          refundPercent: action === "partial_refund" ? refundPercent : undefined,
+          reason: reasonText,
+        });
+        setMessage(result.message ?? "Resolved.");
+        onResolved();
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Resolve failed.");
+      }
     });
   }
 
@@ -94,6 +149,9 @@ function DisputeCard({ dispute }: { dispute: AdminDispute }) {
           <p className="text-xs text-zinc-500">
             Dispute {dispute.id} · Booking {dispute.bookingId}
           </p>
+          {sla ? (
+            <p className="mt-1 text-xs text-zinc-400">{sla}</p>
+          ) : null}
         </div>
         <p className="text-sm font-medium text-zinc-200">
           {formatPence(dispute.amountPence)}
@@ -154,6 +212,16 @@ function DisputeCard({ dispute }: { dispute: AdminDispute }) {
 
       {action ? (
         <div className="mt-4 space-y-3">
+          <label className="block text-sm text-zinc-300">
+            Reason
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-zinc-100"
+              placeholder="Internal reason for audit trail"
+            />
+          </label>
           <AuditNotice
             actionLabel={
               ACTIONS.find((a) => a.id === action)?.label ?? "dispute resolution"

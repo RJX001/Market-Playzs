@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, require_role
-from app.domain_enums import UserRole
+from app.domain_enums import BookingStatus, UserRole
 from app.repositories.memory_store import store
 from app.schemas.bookings import (
     BookingCreate,
     BookingCreateResponse,
+    BookingListResponse,
     BookingResponse,
     ReviewCreate,
     ReviewResponse,
@@ -21,6 +23,13 @@ from app.services.booking_service import (
 )
 
 router = APIRouter(prefix="/api/bookings", tags=["bookings"])
+
+
+class CancelBookingResponse(BaseModel):
+    booking_id: str
+    status: BookingStatus
+    refund_pence: int
+    refund_percent: int
 
 
 def _to_response(booking) -> BookingResponse:
@@ -69,6 +78,26 @@ async def create_booking(
         client_secret=client_secret,
         status=booking.status,
         total_pence=booking.total_pence,
+    )
+
+
+@router.get("", response_model=BookingListResponse)
+async def list_bookings(
+    user: CurrentUser = Depends(
+        require_role(UserRole.BUYER, UserRole.SELLER, UserRole.ADMIN)
+    ),
+) -> BookingListResponse:
+    """Own bookings for buyer/seller; admin sees all."""
+    if user.role == UserRole.BUYER:
+        rows = store.list_bookings_for_buyer(user.id)
+    elif user.role == UserRole.SELLER:
+        rows = store.list_bookings_for_seller(user.id)
+    else:
+        rows = store.list_bookings()
+    rows.sort(key=lambda row: row.created_at, reverse=True)
+    return BookingListResponse(
+        items=[_to_response(row) for row in rows],
+        total=len(rows),
     )
 
 
@@ -141,3 +170,42 @@ async def report_issue(
     except (BookingServiceError, InvalidTransitionError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_response(booking)
+
+
+@router.post(
+    "/{booking_id}/cancel",
+    response_model=CancelBookingResponse,
+    summary="Cancel a booking before campaign start",
+    description=(
+        "Buyer or seller cancels their own unpaid (Pending_Payment) or "
+        "Confirmed booking before start_date. Seller cancellations refund 100%. "
+        "Buyer cancellations refund 100% when more than 7 days remain, 50% "
+        "when 3–7 days remain, and 0% when fewer than 3 days remain. "
+        "Availability is unlocked. Terminal statuses cannot be cancelled."
+    ),
+)
+async def cancel_booking(
+    booking_id: str,
+    user: CurrentUser = Depends(require_role(UserRole.BUYER, UserRole.SELLER)),
+) -> CancelBookingResponse:
+    booking = store.get_booking(booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    if user.role == UserRole.BUYER and booking.buyer_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if user.role == UserRole.SELLER and booking.seller_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        result = booking_service.cancel_booking(
+            booking_id=booking_id,
+            actor_id=user.id,
+            actor_role=user.role,
+        )
+    except (BookingServiceError, InvalidTransitionError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return CancelBookingResponse(
+        booking_id=result.booking.id,
+        status=result.booking.status,
+        refund_pence=result.refund_pence,
+        refund_percent=result.refund_percent,
+    )

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
@@ -18,11 +19,29 @@ const ROLE_HREF: Record<PortalRole, string> = {
   admin: ROUTES.admin,
 };
 
+const MP_ROLE_KEY = "mp_role";
+
+function isPortalRole(value: string | null): value is PortalRole {
+  return value === "buyer" || value === "seller" || value === "admin";
+}
+
 /**
  * Buyer / Seller / Admin segmented switcher (Section 4).
  * Active pill uses app primary #3B5BFF; switching resets to that role's home.
+ * Session role is stored in localStorage `mp_role` when Clerk is not present.
  */
 export function RoleToggle({ activeRole, className }: RoleToggleProps) {
+  const [sessionRole, setSessionRole] = useState<PortalRole>(activeRole);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(MP_ROLE_KEY);
+      if (isPortalRole(stored)) setSessionRole(stored);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   return (
     <div
       className={cn(
@@ -39,11 +58,19 @@ export function RoleToggle({ activeRole, className }: RoleToggleProps) {
           { role: "admin", label: "Admin" },
         ] as const
       ).map(({ role, label }) => {
-        const active = activeRole === role;
+        const active = sessionRole === role;
         return (
           <Link
             key={role}
             href={ROLE_HREF[role]}
+            onClick={() => {
+              try {
+                localStorage.setItem(MP_ROLE_KEY, role);
+              } catch {
+                /* ignore */
+              }
+              setSessionRole(role);
+            }}
             className={cn(
               "rounded-[7px] px-2.5 py-1.5 transition-colors",
               active

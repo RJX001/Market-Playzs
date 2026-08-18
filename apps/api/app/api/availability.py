@@ -1,4 +1,9 @@
-"""Availability API — one row per date per listing."""
+"""Availability API — one row per date per listing.
+
+Date locks are applied in ``booking_service.create_booking`` at PaymentIntent
+creation and released on Cancelled/Refunded (including 15-minute
+``release_abandoned_pending_payment``). This router stays read/ensure-window.
+"""
 
 from __future__ import annotations
 

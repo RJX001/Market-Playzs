@@ -24,6 +24,26 @@ class ListingServiceError(ValueError):
     pass
 
 
+class ListingNotFoundError(ListingServiceError):
+    pass
+
+
+class ListingForbiddenError(ListingServiceError):
+    pass
+
+
+ALLOWED_SORTS = frozenset(
+    {
+        "newest",
+        "price_asc",
+        "price_desc",
+        "cis_asc",
+        "cis_desc",
+        "distance",
+    }
+)
+
+
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
@@ -68,6 +88,7 @@ def search_listings(
     include_new_cis: bool = True,
     available_from: date | None = None,
     available_to: date | None = None,
+    sort: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[ListingRecord], int]:
@@ -173,23 +194,91 @@ def search_listings(
 
         results.append(listing)
 
+    results = _sort_listings(
+        results,
+        sort=sort,
+        center_lat=center_lat if has_radius else None,
+        center_lng=center_lng if has_radius else None,
+    )
+
     total = len(results)
     start = (page - 1) * page_size
     end = start + page_size
     return results[start:end], total
 
 
+def _sort_listings(
+    results: list[ListingRecord],
+    *,
+    sort: str | None,
+    center_lat: float | None,
+    center_lng: float | None,
+) -> list[ListingRecord]:
+    sort_key = (sort or "newest").strip().lower()
+    if sort_key not in ALLOWED_SORTS:
+        raise ListingServiceError(f"Invalid sort: {sort}")
+
+    if sort_key == "price_asc":
+        results.sort(key=lambda i: i.price_per_day_pence)
+    elif sort_key == "price_desc":
+        results.sort(key=lambda i: i.price_per_day_pence, reverse=True)
+    elif sort_key == "cis_asc":
+        results.sort(
+            key=lambda i: (
+                i.cis_score is None,
+                i.cis_score if i.cis_score is not None else 0,
+            )
+        )
+    elif sort_key == "cis_desc":
+        results.sort(
+            key=lambda i: (
+                i.cis_score is None,
+                -(i.cis_score if i.cis_score is not None else 0),
+            )
+        )
+    elif sort_key == "distance" and center_lat is not None and center_lng is not None:
+        results.sort(
+            key=lambda i: _haversine_km(center_lat, center_lng, i.lat, i.lng)
+        )
+    else:
+        # newest (default); distance without a centre falls back here
+        results.sort(key=lambda i: i.created_at, reverse=True)
+    return results
+
+
+def require_owner(listing_id: str, seller_id: str) -> ListingRecord:
+    listing = store.get_listing(listing_id)
+    if not listing:
+        raise ListingNotFoundError("Listing not found")
+    if listing.seller_id != seller_id:
+        raise ListingForbiddenError("Only the listing owner may perform this action")
+    return listing
+
+
+def get_listing_for_viewer(
+    listing_id: str, requester_id: str | None = None
+) -> ListingRecord:
+    """Public/buyer path: published only. Owner may read own draft/suspended."""
+    listing = store.get_listing(listing_id)
+    if not listing:
+        raise ListingNotFoundError("Listing not found")
+    if listing.status == ListingStatus.PUBLISHED:
+        return listing
+    if requester_id and listing.seller_id == requester_id:
+        return listing
+    raise ListingNotFoundError("Listing not found")
+
+
 def publish_listing(listing_id: str, seller_id: str) -> ListingRecord:
     """
     Publish guard: Stripe connected, required fields complete, ≥1 image.
     """
-    listing = store.get_listing(listing_id)
-    if not listing:
-        raise ListingServiceError("Listing not found")
-    if listing.seller_id != seller_id:
-        raise ListingServiceError("Only the listing owner may publish")
+    listing = require_owner(listing_id, seller_id)
 
     errors: list[str] = []
+
+    if listing.status == ListingStatus.SUSPENDED:
+        errors.append("Suspended listings cannot be published")
 
     seller = store.get_seller(seller_id)
     if (
@@ -243,14 +332,17 @@ def create_listing_draft(seller_id: str, data: dict) -> ListingRecord:
     return store.create_listing(record)
 
 
+def list_seller_listings(seller_id: str) -> list[ListingRecord]:
+    """Owner inventory: drafts, published, and suspended."""
+    items = [row for row in store.list_listings() if row.seller_id == seller_id]
+    items.sort(key=lambda row: row.updated_at, reverse=True)
+    return items
+
+
 def update_listing_draft(
     listing_id: str, seller_id: str, data: dict
 ) -> ListingRecord:
-    listing = store.get_listing(listing_id)
-    if not listing:
-        raise ListingServiceError("Listing not found")
-    if listing.seller_id != seller_id:
-        raise ListingServiceError("Only the listing owner may update")
+    listing = require_owner(listing_id, seller_id)
     if listing.status == ListingStatus.SUSPENDED:
         raise ListingServiceError("Suspended listings cannot be edited by seller")
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { apiFetch, ApiError } from "@/components/buyer/api-client";
 import type { BuyerListing } from "@/components/buyer/types";
 
 export interface BookingDraft {
@@ -8,20 +9,25 @@ export interface BookingDraft {
   startDate: string;
   endDate: string;
   paymentMethod?: "card" | "invoice";
+  bookingId?: string;
+  clientSecret?: string;
+  status?: string;
+  totalPence?: number;
 }
+
+export type BookingOk = { ok: true; draft: BookingDraft };
+export type BookingFail = { ok: false; error: string };
 
 export interface UseBookingResult {
   isSubmitting: boolean;
   error: string | null;
   lastDraft: BookingDraft | null;
-  /** Creates a booking via POST /api/bookings when present; otherwise keeps a local draft. */
   startBooking: (
     listing: BuyerListing,
     startDate: string,
     endDate: string,
     options?: { paymentMethod?: "card" | "invoice" },
-  ) => Promise<{ ok: true; draft: BookingDraft } | { ok: false; error: string }>;
-  /** Multi-space campaign checkout — one booking request per cart item. */
+  ) => Promise<BookingOk | BookingFail>;
   startCampaignBookings: (
     listings: BuyerListing[],
     startDate: string,
@@ -31,42 +37,42 @@ export interface UseBookingResult {
     | { ok: true; bookedCount: number; drafts: BookingDraft[] }
     | { ok: false; error: string; bookedCount: number }
   >;
+  submitReview: (
+    bookingId: string,
+    rating: number,
+    options?: { deliveryScore?: 0 | 0.5 | 1; comment?: string },
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
   clearError: () => void;
 }
 
-async function postBookingIfAvailable(
-  draft: BookingDraft,
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch("/api/bookings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        listing_id: draft.listingId,
-        start_date: draft.startDate,
-        end_date: draft.endDate,
-        payment_method: draft.paymentMethod ?? "card",
-      }),
-    });
-    // Endpoint missing (404) or not ready — treat as client-side success with draft.
-    if (res.status === 404 || res.status === 501) {
-      return { ok: true };
-    }
-    if (!res.ok) {
-      let message = `Booking failed (${res.status})`;
-      try {
-        const body = (await res.json()) as { detail?: string; error?: string };
-        message = body.detail ?? body.error ?? message;
-      } catch {
-        /* ignore parse */
-      }
-      return { ok: false, error: message };
-    }
-    return { ok: true };
-  } catch {
-    // Network / no route — keep draft-only success for local UX.
-    return { ok: true };
-  }
+interface BookingCreateResponse {
+  booking_id?: string;
+  bookingId?: string;
+  client_secret?: string;
+  clientSecret?: string;
+  status?: string;
+  total_pence?: number;
+  totalPence?: number;
+}
+
+async function postBooking(draft: BookingDraft): Promise<BookingDraft> {
+  const body = await apiFetch<BookingCreateResponse>("/api/bookings", {
+    method: "POST",
+    auth: true,
+    body: JSON.stringify({
+      listing_id: draft.listingId,
+      start_date: draft.startDate,
+      end_date: draft.endDate,
+    }),
+  });
+  const clientSecret = body.client_secret ?? body.clientSecret;
+  return {
+    ...draft,
+    bookingId: body.booking_id ?? body.bookingId,
+    clientSecret,
+    status: body.status,
+    totalPence: body.total_pence ?? body.totalPence,
+  };
 }
 
 function validateBooking(
@@ -83,10 +89,20 @@ function validateBooking(
   return null;
 }
 
+function toErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401) return "Log in to complete a booking.";
+    if (err.status === 404) {
+      return "Booking API returned 404 — booking was not created.";
+    }
+    return err.message;
+  }
+  return "Booking failed.";
+}
+
 /**
- * Buyer booking helper — wires to POST /api/bookings when the API ships.
- * Money remains in pence; UI formats at the edge.
- * Does not invent schemas or change booking status enums.
+ * Buyer booking helper — POST /api/bookings.
+ * 404 is an error (never treated as success). Money stays in pence.
  */
 export function useBooking(): UseBookingResult {
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -101,9 +117,7 @@ export function useBooking(): UseBookingResult {
       startDate: string,
       endDate: string,
       paymentMethod?: "card" | "invoice",
-    ): Promise<
-      { ok: true; draft: BookingDraft } | { ok: false; error: string }
-    > => {
+    ): Promise<BookingOk | BookingFail> => {
       const validationError = validateBooking(listing, startDate, endDate);
       if (validationError) {
         return { ok: false, error: validationError };
@@ -114,11 +128,12 @@ export function useBooking(): UseBookingResult {
         endDate,
         paymentMethod,
       };
-      const posted = await postBookingIfAvailable(draft);
-      if (!posted.ok) {
-        return { ok: false, error: posted.error ?? "Booking failed." };
+      try {
+        const posted = await postBooking(draft);
+        return { ok: true, draft: posted };
+      } catch (err) {
+        return { ok: false, error: toErrorMessage(err) };
       }
-      return { ok: true, draft };
     },
     [],
   );
@@ -129,9 +144,7 @@ export function useBooking(): UseBookingResult {
       startDate: string,
       endDate: string,
       options?: { paymentMethod?: "card" | "invoice" },
-    ): Promise<
-      { ok: true; draft: BookingDraft } | { ok: false; error: string }
-    > => {
+    ): Promise<BookingOk | BookingFail> => {
       setIsSubmitting(true);
       setError(null);
       try {
@@ -196,12 +209,40 @@ export function useBooking(): UseBookingResult {
     [createDraft],
   );
 
+  const submitReview = useCallback(
+    async (
+      bookingId: string,
+      rating: number,
+      options?: { deliveryScore?: 0 | 0.5 | 1; comment?: string },
+    ) => {
+      setError(null);
+      try {
+        await apiFetch(`/api/bookings/${bookingId}/review`, {
+          method: "POST",
+          auth: true,
+          body: JSON.stringify({
+            rating,
+            delivery_score: options?.deliveryScore ?? 1,
+            comment: options?.comment ?? null,
+          }),
+        });
+        return { ok: true as const };
+      } catch (err) {
+        const message = toErrorMessage(err);
+        setError(message);
+        return { ok: false as const, error: message };
+      }
+    },
+    [],
+  );
+
   return {
     isSubmitting,
     error,
     lastDraft,
     startBooking,
     startCampaignBookings,
+    submitReview,
     clearError,
   };
 }

@@ -1,8 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CATEGORY_LABELS, type Category } from "@marketplays/shared";
 import { PublishGuard } from "@/components/seller/PublishGuard";
+import {
+  createConnectAccountLink,
+  createListing,
+  getListing,
+  patchListing,
+  publishListing,
+  SellerApiError,
+  uploadMedia,
+} from "@/components/seller/seller-api";
 import {
   sellerCardClass,
   sellerInputClass,
@@ -15,6 +24,9 @@ const CATEGORY_OPTIONS = Object.entries(CATEGORY_LABELS) as [
   Category,
   string,
 ][];
+
+const DEFAULT_LAT = 51.5074;
+const DEFAULT_LNG = -0.1278;
 
 export interface ListingEditorValues {
   title: string;
@@ -30,6 +42,7 @@ export interface ListingEditorValues {
 
 interface ListingEditorProps {
   mode: "new" | "edit";
+  listingId?: string;
   initial?: Partial<ListingEditorValues>;
 }
 
@@ -37,7 +50,8 @@ interface ListingEditorProps {
  * Listing editor — modal visual language (Section 10).
  * Used on /listings/new and /listings/edit/[id]; publish guard preserved.
  */
-export function ListingEditor({ mode, initial }: ListingEditorProps) {
+export function ListingEditor({ mode, listingId, initial }: ListingEditorProps) {
+  const [id, setId] = useState(listingId ?? "");
   const [title, setTitle] = useState(initial?.title ?? "");
   const [category, setCategory] = useState<Category>(
     initial?.category ?? "sports_club",
@@ -51,8 +65,49 @@ export function ListingEditor({ mode, initial }: ListingEditorProps) {
   const [bookingType, setBookingType] = useState<"instant" | "request">(
     initial?.bookingType ?? "instant",
   );
-  const imageCount = initial?.imageCount ?? 0;
-  const stripeConnected = initial?.stripeConnected ?? false;
+  const [images, setImages] = useState<string[]>([]);
+  const [stripeConnected, setStripeConnected] = useState(
+    initial?.stripeConnected ?? false,
+  );
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const imageCount = images.length || initial?.imageCount || 0;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("stripe") === "return") {
+      setStripeConnected(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!listingId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const listing = await getListing(listingId);
+        if (cancelled || !listing) return;
+        setId(listing.id);
+        setTitle(listing.title);
+        setCategory(listing.category);
+        setDescription(listing.description ?? "");
+        setPricePerDayPence(listing.price_per_day_pence);
+        setImages(listing.images ?? []);
+        const types = listing.booking_types ?? [];
+        if (types.includes("request")) setBookingType("request");
+        if (listing.status === "published") setStripeConnected(true);
+      } catch {
+        /* keep initial */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [listingId]);
 
   const requiredFieldsComplete =
     title.trim().length > 0 &&
@@ -62,6 +117,105 @@ export function ListingEditor({ mode, initial }: ListingEditorProps) {
 
   const canPublish =
     stripeConnected && requiredFieldsComplete && imageCount > 0;
+
+  function payload() {
+    return {
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      price_per_day_pence: pricePerDayPence,
+      lat: DEFAULT_LAT,
+      lng: DEFAULT_LNG,
+      images,
+      booking_types: [bookingType],
+    };
+  }
+
+  async function saveDraft() {
+    setBusy(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      if (id) {
+        const updated = await patchListing(id, payload());
+        setId(updated.id);
+      } else {
+        const created = await createListing(payload());
+        setId(created.id);
+      }
+      setStatusMessage("Draft saved.");
+    } catch (err) {
+      setErrorMessage(
+        err instanceof SellerApiError ? err.message : "Could not save draft.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublish() {
+    setBusy(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      let listingIdToPublish = id;
+      if (listingIdToPublish) {
+        await patchListing(listingIdToPublish, payload());
+      } else {
+        const created = await createListing(payload());
+        listingIdToPublish = created.id;
+        setId(created.id);
+      }
+      const result = await publishListing(listingIdToPublish);
+      setStatusMessage(result.message || "Listing published.");
+    } catch (err) {
+      setErrorMessage(
+        err instanceof SellerApiError
+          ? err.message
+          : "Could not publish listing.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleConnectStripe() {
+    setBusy(true);
+    setErrorMessage(null);
+    try {
+      const origin = window.location.origin;
+      const path = window.location.pathname;
+      const result = await createConnectAccountLink({
+        refresh_url: `${origin}${path}?stripe=refresh`,
+        return_url: `${origin}${path}?stripe=return`,
+      });
+      window.location.assign(result.url);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof SellerApiError
+          ? err.message
+          : "Could not start Stripe Connect.",
+      );
+      setBusy(false);
+    }
+  }
+
+  async function handlePhotoSelected(file: File | undefined) {
+    if (!file) return;
+    setBusy(true);
+    setErrorMessage(null);
+    try {
+      const url = await uploadMedia(file);
+      setImages((prev) => [...prev, url]);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof SellerApiError ? err.message : "Image upload failed.",
+      );
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
 
   return (
     <div className={`${sellerCardClass} mx-auto w-full max-w-[560px] overflow-hidden`}>
@@ -77,11 +231,22 @@ export function ListingEditor({ mode, initial }: ListingEditorProps) {
       <div className="space-y-5 px-5 py-5">
         <div>
           <p className={sellerLabelClass}>Photos</p>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handlePhotoSelected(e.target.files?.[0])}
+          />
           <div className="mt-1.5 grid grid-cols-3 gap-2.5">
             {[0, 1, 2].map((slot) => (
               <button
                 key={slot}
                 type="button"
+                disabled={busy}
+                onClick={() => {
+                  if (slot >= images.length) fileRef.current?.click();
+                }}
                 className="flex h-[90px] items-center justify-center rounded-[9px] border border-dashed border-[#262C38] bg-[#171C26] text-[12px] text-[#6B7280] transition-colors hover:border-[#3B5BFF]/50 hover:text-[#9AA3B2]"
               >
                 {slot < imageCount ? `Photo ${slot + 1}` : "Add photo"}
@@ -189,16 +354,43 @@ export function ListingEditor({ mode, initial }: ListingEditorProps) {
           requiredFieldsComplete={requiredFieldsComplete}
           imageCount={imageCount}
         />
+
+        {errorMessage ? (
+          <p className="text-[13px] text-[#F1544B]" role="alert">
+            {errorMessage}
+          </p>
+        ) : null}
+        {statusMessage ? (
+          <p className="text-[13px] text-[#34D399]" role="status">
+            {statusMessage}
+          </p>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2.5 border-t border-[#1D2330] bg-[#0A0E16]/40 px-5 py-4">
-        <button type="button" className={sellerOutlineBtnClass}>
+        {!stripeConnected ? (
+          <button
+            type="button"
+            className={sellerOutlineBtnClass}
+            disabled={busy}
+            onClick={handleConnectStripe}
+          >
+            Connect Stripe
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={sellerOutlineBtnClass}
+          disabled={busy}
+          onClick={saveDraft}
+        >
           Save as draft
         </button>
         <button
           type="button"
           className={sellerPrimaryBtnClass}
-          disabled={!canPublish}
+          disabled={!canPublish || busy}
+          onClick={handlePublish}
           title={
             canPublish
               ? undefined

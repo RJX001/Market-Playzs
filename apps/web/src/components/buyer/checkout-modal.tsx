@@ -13,6 +13,10 @@ import {
 import { useCampaignCart } from "@/components/buyer/campaign-cart-context";
 import { formatWeeklyPriceFromDailyPence } from "@/components/buyer/price";
 import { cn } from "@/lib/utils";
+import {
+  StripePaymentForm,
+  stripePublishableKey,
+} from "@/components/buyer/stripe-payment-form";
 
 export type CheckoutPaymentMethod = "card" | "invoice";
 
@@ -24,6 +28,7 @@ export interface CheckoutModalProps {
     ok: boolean;
     error?: string;
     bookedCount?: number;
+    clientSecrets?: string[];
   }>;
   isSubmitting?: boolean;
 }
@@ -40,6 +45,8 @@ export function CheckoutModal({
   const [agreed, setAgreed] = useState(false);
   const [successCount, setSuccessCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [paySecrets, setPaySecrets] = useState<string[]>([]);
+  const [payIndex, setPayIndex] = useState(0);
 
   useEffect(() => {
     if (!open) {
@@ -47,6 +54,8 @@ export function CheckoutModal({
       setSuccessCount(null);
       setError(null);
       setPaymentMethod("card");
+      setPaySecrets([]);
+      setPayIndex(0);
     }
   }, [open]);
 
@@ -58,6 +67,13 @@ export function CheckoutModal({
     setError(null);
     const result = await onConfirm(paymentMethod);
     if (result.ok) {
+      const secrets = result.clientSecrets?.filter(Boolean) ?? [];
+      if (paymentMethod === "card" && secrets.length > 0 && stripePublishableKey()) {
+        setPaySecrets(secrets);
+        setPayIndex(0);
+        setSuccessCount(result.bookedCount ?? items.length);
+        return;
+      }
       setSuccessCount(result.bookedCount ?? items.length);
       clear();
     } else {
@@ -75,7 +91,39 @@ export function CheckoutModal({
         className="w-[480px] max-w-[calc(100%-2rem)] gap-0 rounded-[14px] border border-[#262C38] bg-[#10141C] p-0 text-[#F5F6F8] sm:max-w-[480px]"
         showCloseButton={successCount === null}
       >
-        {successCount !== null ? (
+        {paySecrets.length > 0 && successCount !== null ? (
+          <div className="flex flex-col px-6 py-8">
+            <DialogHeader>
+              <DialogTitle className="text-[20px] font-bold text-white">
+                Pay for booking {payIndex + 1} of {paySecrets.length}
+              </DialogTitle>
+              <DialogDescription className="text-[14px] text-[#9AA3B2]">
+                Confirm the card payment for this PaymentIntent.
+              </DialogDescription>
+            </DialogHeader>
+            {error ? (
+              <p className="mt-3 text-[12.5px] text-[#F1544B]" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <div className="mt-4">
+              <StripePaymentForm
+                clientSecret={paySecrets[payIndex]}
+                onError={(message) => setError(message)}
+                onPaid={() => {
+                  setError(null);
+                  const next = payIndex + 1;
+                  if (next >= paySecrets.length) {
+                    setPaySecrets([]);
+                    clear();
+                  } else {
+                    setPayIndex(next);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        ) : successCount !== null ? (
           <div className="flex flex-col items-center px-6 py-10 text-center">
             <div className="mb-4 flex size-14 items-center justify-center rounded-full border border-[#155336] bg-[#0C2A1D]">
               <Check className="size-7 text-[#34D399]" strokeWidth={2.5} />

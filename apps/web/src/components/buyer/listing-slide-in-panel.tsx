@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { MapPin, MessageSquare, ShoppingCart, Users, Zap } from "lucide-react";
+import { Heart, MapPin, MessageSquare, ShoppingCart, Users, Zap } from "lucide-react";
 import { CATEGORY_LABELS } from "@marketplays/shared";
 import { CISBadge } from "@/components/shared/CISBadge";
+import { fetchListingAvailability } from "@/components/buyer/listing-api";
+import type { AvailabilityDayDto } from "@/components/buyer/listing-mapper";
 import { pinAvailabilityColour } from "@/components/buyer/pin-colour";
 import { formatWeeklyPriceFromDailyPence } from "@/components/buyer/price";
 import type { BuyerListing, PinAvailability } from "@/components/buyer/types";
@@ -17,6 +20,12 @@ export interface ListingSlideInPanelProps {
   onMessageSeller?: (listing: BuyerListing) => void;
   inCart?: boolean;
   onToggleCart?: (listing: BuyerListing) => void;
+  isFavourite?: boolean;
+  onToggleFavourite?: (listing: BuyerListing) => void;
+  bookingError?: string | null;
+  isBooking?: boolean;
+  availabilityFrom?: string;
+  availabilityTo?: string;
   readOnly?: boolean;
 }
 
@@ -45,11 +54,45 @@ export function ListingSlideInPanel({
   onMessageSeller,
   inCart = false,
   onToggleCart,
+  isFavourite = false,
+  onToggleFavourite,
+  bookingError = null,
+  isBooking = false,
+  availabilityFrom,
+  availabilityTo,
   readOnly = false,
 }: ListingSlideInPanelProps) {
+  const [availDays, setAvailDays] = useState<AvailabilityDayDto[] | null>(null);
+
+  useEffect(() => {
+    if (!open || !listing) {
+      setAvailDays(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchListingAvailability(
+      listing.id,
+      availabilityFrom,
+      availabilityTo,
+    ).then((result) => {
+      if (cancelled) return;
+      setAvailDays(result.days.length > 0 ? result.days : null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, listing?.id, availabilityFrom, availabilityTo]);
+
   if (!open) return null;
 
-  const strip = listing ? buildAvailabilityStrip(listing) : [];
+  const strip: PinAvailability[] = availDays
+    ? availDays.slice(0, 20).map((d) => (d.is_locked ? "booked" : "available"))
+    : listing
+      ? buildAvailabilityStrip(listing)
+      : [];
+  while (strip.length > 0 && strip.length < 20) {
+    strip.push("available");
+  }
 
   return (
     <aside
@@ -142,20 +185,35 @@ export function ListingSlideInPanel({
             </div>
 
             {!readOnly && (
-              <button
-                type="button"
-                onClick={() => onToggleCart?.(listing)}
-                disabled={listing.availability === "booked"}
-                className={cn(
-                  "flex w-full items-center justify-center gap-2 rounded-[9px] border px-3 py-2.5 text-[13px] font-semibold transition-colors disabled:opacity-40",
-                  inCart
-                    ? "border-[#5C1F1F] bg-[#301414] text-[#F1544B]"
-                    : "border-[#262C38] bg-[#171C26] text-[#F5F6F8] hover:border-[#3B5BFF]",
-                )}
-              >
-                <ShoppingCart className="size-4" />
-                {inCart ? "Remove from campaign cart" : "Add to campaign cart"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => onToggleFavourite?.(listing)}
+                  className={cn(
+                    "flex w-full items-center justify-center gap-2 rounded-[9px] border px-3 py-2.5 text-[13px] font-semibold transition-colors",
+                    isFavourite
+                      ? "border-[#3B5BFF] bg-[#3B5BFF]/20 text-[#F5F6F8]"
+                      : "border-[#262C38] bg-[#171C26] text-[#F5F6F8] hover:border-[#3B5BFF]",
+                  )}
+                >
+                  <Heart className="size-4" />
+                  {isFavourite ? "Saved to favourites" : "Save to favourites"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onToggleCart?.(listing)}
+                  disabled={listing.availability === "booked"}
+                  className={cn(
+                    "flex w-full items-center justify-center gap-2 rounded-[9px] border px-3 py-2.5 text-[13px] font-semibold transition-colors disabled:opacity-40",
+                    inCart
+                      ? "border-[#5C1F1F] bg-[#301414] text-[#F1544B]"
+                      : "border-[#262C38] bg-[#171C26] text-[#F5F6F8] hover:border-[#3B5BFF]",
+                  )}
+                >
+                  <ShoppingCart className="size-4" />
+                  {inCart ? "Remove from campaign cart" : "Add to campaign cart"}
+                </button>
+              </>
             )}
 
             <Link
@@ -167,24 +225,31 @@ export function ListingSlideInPanel({
           </div>
 
           {!readOnly && (
-            <div className="absolute inset-x-0 bottom-0 flex gap-2 border-t border-[#1D2330] bg-[#0A0E16] p-4">
-              <button
-                type="button"
-                disabled={listing.availability === "booked"}
-                onClick={() => onBook?.(listing)}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-[#3B5BFF] px-3 py-2.5 text-[13px] font-semibold text-white disabled:opacity-40"
-              >
-                <Zap className="size-4" />
-                Instant book
-              </button>
-              <button
-                type="button"
-                onClick={() => onMessageSeller?.(listing)}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-[9px] border border-[#262C38] bg-[#171C26] px-3 py-2.5 text-[13px] font-semibold text-[#F5F6F8]"
-              >
-                <MessageSquare className="size-4" />
-                Message seller
-              </button>
+            <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 border-t border-[#1D2330] bg-[#0A0E16] p-4">
+              {bookingError ? (
+                <p className="text-[12.5px] text-[#F1544B]" role="alert">
+                  {bookingError}
+                </p>
+              ) : null}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={listing.availability === "booked" || isBooking}
+                  onClick={() => onBook?.(listing)}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-[9px] bg-[#3B5BFF] px-3 py-2.5 text-[13px] font-semibold text-white disabled:opacity-40"
+                >
+                  <Zap className="size-4" />
+                  {isBooking ? "Booking…" : "Instant book"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onMessageSeller?.(listing)}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-[9px] border border-[#262C38] bg-[#171C26] px-3 py-2.5 text-[13px] font-semibold text-[#F5F6F8]"
+                >
+                  <MessageSquare className="size-4" />
+                  Message seller
+                </button>
+              </div>
             </div>
           )}
         </>

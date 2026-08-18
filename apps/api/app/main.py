@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
 from app.api.router import domain_router
+from app.services import booking_service
 
 app = FastAPI(
     title="Marketplays API",
@@ -67,13 +68,32 @@ def _assert_cron_secret(authorization: str | None) -> None:
         )
 
 
-@app.get("/api/cron/booking-transitions")
+@app.get(
+    "/api/cron/booking-transitions",
+    summary="Run daily booking state-machine transitions",
+    description=(
+        "Cron (00:01 UTC): Confirmed→Live when start_date is reached, "
+        "Live→Awaiting_Proof when end_date has passed, 48h Awaiting_Proof→"
+        "Admin_Flagged, 72h Awaiting_Buyer_Review auto-approve (rating 3), "
+        "and Pending_Payment 15-minute abandonment release."
+    ),
+)
 async def cron_booking_transitions(
     authorization: str | None = Header(default=None),
-) -> dict[str, str]:
-    """Daily 00:01 UTC — Confirmed→Live, Live→Awaiting_Proof (TODO: wire booking_service)."""
+) -> dict[str, str | int]:
+    """Daily 00:01 UTC — Confirmed→Live, Live→Awaiting_Proof, timeouts, abandonment."""
     _assert_cron_secret(authorization)
-    return {"status": "ok", "job": "booking-transitions", "detail": "stub"}
+    abandoned = booking_service.release_abandoned_pending_payment()
+    daily = booking_service.run_daily_transitions()
+    return {
+        "status": "ok",
+        "job": "booking-transitions",
+        "abandoned_released": len(abandoned),
+        "confirmed_to_live": daily["confirmed_to_live"],
+        "live_to_awaiting_proof": daily["live_to_awaiting_proof"],
+        "proof_timeout_flagged": daily["proof_timeout_flagged"],
+        "reviews_auto_approved": daily["reviews_auto_approved"],
+    }
 
 
 @app.get("/api/cron/extend-availability")

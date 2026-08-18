@@ -17,12 +17,12 @@ import {
   DEFAULT_BUYER_FILTERS,
   FilterSidebar,
 } from "@/components/buyer/filter-sidebar";
-import { filterListings } from "@/components/buyer/filter-listings";
 import { ListingSlideInPanel } from "@/components/buyer/listing-slide-in-panel";
 import { ListingsGrid } from "@/components/buyer/listings-grid";
-import { MOCK_BUYER_LISTINGS } from "@/components/buyer/mock-listings";
+import { useFavourites } from "@/components/buyer/use-favourites";
+import { useListings } from "@/components/buyer/use-listings";
 import { useSavedSearches } from "@/components/buyer/use-saved-searches";
-import type { BuyerFilterState, BuyerListing } from "@/components/buyer/types";
+import type { BuyerFilterState, BuyerListing, MapBBox } from "@/components/buyer/types";
 import {
   Sheet,
   SheetContent,
@@ -38,34 +38,38 @@ function BuyerMapPageInner() {
   const router = useRouter();
   const [filters, setFilters] =
     useState<BuyerFilterState>(DEFAULT_BUYER_FILTERS);
+  const [bbox, setBbox] = useState<MapBBox | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("map");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
 
-  const { startBooking, startCampaignBookings, isSubmitting } = useBooking();
+  const {
+    startBooking,
+    startCampaignBookings,
+    isSubmitting,
+    error: bookingError,
+    clearError,
+  } = useBooking();
   const { isInCart, toggle, items } = useCampaignCart();
   const { searches, save, remove } = useSavedSearches();
-
-  const listings = useMemo(
-    () => filterListings(MOCK_BUYER_LISTINGS, filters),
-    [filters],
+  const { isFavourite, toggle: toggleFavourite, error: favError } = useFavourites();
+  const { listings, loading, error: listingsError, usedMock } = useListings(
+    filters,
+    bbox,
   );
 
   const selectedListing: BuyerListing | null = useMemo(() => {
     if (!selectedId) return null;
-    return (
-      listings.find((l) => l.id === selectedId) ??
-      MOCK_BUYER_LISTINGS.find((l) => l.id === selectedId) ??
-      null
-    );
+    return listings.find((l) => l.id === selectedId) ?? null;
   }, [listings, selectedId]);
 
   const handlePinClick = useCallback((id: string) => {
     setSelectedId(id);
     setPanelOpen(true);
-  }, []);
+    clearError();
+  }, [clearError]);
 
   const handleOpenChange = useCallback((open: boolean) => {
     setPanelOpen(open);
@@ -81,6 +85,10 @@ function BuyerMapPageInner() {
     save(filters);
   }, [filters, save]);
 
+  const handleViewportChange = useCallback((next: MapBBox) => {
+    setBbox(next);
+  }, []);
+
   const handleCheckoutConfirm = useCallback(
     async (paymentMethod: CheckoutPaymentMethod) => {
       const result = await startCampaignBookings(
@@ -92,7 +100,13 @@ function BuyerMapPageInner() {
       if (!result.ok) {
         return { ok: false, error: result.error, bookedCount: result.bookedCount };
       }
-      return { ok: true, bookedCount: result.bookedCount };
+      return {
+        ok: true,
+        bookedCount: result.bookedCount,
+        clientSecrets: result.drafts
+          .map((d) => d.clientSecret)
+          .filter((s): s is string => Boolean(s)),
+      };
     },
     [
       items,
@@ -101,6 +115,8 @@ function BuyerMapPageInner() {
       startCampaignBookings,
     ],
   );
+
+  const banner = listingsError || favError;
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] min-h-0 w-full bg-[#05070C]">
@@ -131,6 +147,7 @@ function BuyerMapPageInner() {
             listings={listings}
             selectedId={selectedId}
             onPinClick={handlePinClick}
+            onViewportChange={handleViewportChange}
           />
         ) : (
           <ListingsGrid
@@ -151,7 +168,9 @@ function BuyerMapPageInner() {
             Filters
           </button>
           <div className="rounded-[20px] bg-[#10141C] px-3 py-1.5 text-[12.5px] font-medium text-white shadow">
-            {listings.length} spaces in view
+            {loading
+              ? "Loading spaces…"
+              : `${listings.length} spaces in view`}
           </div>
           <div className="inline-flex rounded-[20px] border border-[#262C38] bg-[#10141C] p-0.5 shadow">
             {(
@@ -176,6 +195,16 @@ function BuyerMapPageInner() {
             ))}
           </div>
         </div>
+
+        {banner ? (
+          <div
+            className="absolute left-[18px] right-[18px] top-[58px] z-30 rounded-[9px] border border-[#5C1F1F] bg-[#301414] px-3 py-2 text-[12.5px] text-[#F1544B]"
+            role="alert"
+          >
+            {banner}
+            {usedMock ? " Showing mock listings until the API responds." : ""}
+          </div>
+        ) : null}
       </div>
 
       <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}>
@@ -211,6 +240,12 @@ function BuyerMapPageInner() {
         onOpenChange={handleOpenChange}
         inCart={selectedListing ? isInCart(selectedListing.id) : false}
         onToggleCart={(listing) => toggle(listing)}
+        isFavourite={selectedListing ? isFavourite(selectedListing.id) : false}
+        onToggleFavourite={(listing) => void toggleFavourite(listing.id)}
+        bookingError={bookingError}
+        isBooking={isSubmitting}
+        availabilityFrom={filters.availabilityFrom}
+        availabilityTo={filters.availabilityTo}
         onBook={(listing) => {
           void startBooking(
             listing,

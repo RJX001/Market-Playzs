@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.api.deps import CurrentUser, require_role
-from app.domain_enums import Category, ListingStatus, UserRole
-from app.repositories.memory_store import store
+from app.domain_enums import Category, UserRole
 from app.schemas.listings import (
     ListingCreate,
     ListingResponse,
@@ -16,10 +16,15 @@ from app.schemas.listings import (
     ListingUpdate,
     PublishListingResponse,
 )
-from app.services import listing_service
-from app.services.listing_service import ListingServiceError
+from app.services import auth_service, listing_service
+from app.services.listing_service import (
+    ListingForbiddenError,
+    ListingNotFoundError,
+    ListingServiceError,
+)
 
 router = APIRouter(prefix="/api/listings", tags=["listings"])
+_optional_bearer = HTTPBearer(auto_error=False)
 
 
 def _to_response(listing) -> ListingResponse:
@@ -43,7 +48,51 @@ def _to_response(listing) -> ListingResponse:
     )
 
 
-@router.get("", response_model=ListingSearchResponse)
+def _http_for_listing_error(exc: ListingServiceError) -> HTTPException:
+    if isinstance(exc, ListingNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ListingForbiddenError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+def _requester_id(
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+    try:
+        payload = auth_service.decode_access_token(credentials.credentials)
+        return str(payload["sub"])
+    except (auth_service.AuthError, KeyError, ValueError):
+        return None
+
+
+def _merge_list(*groups: list | None) -> list | None:
+    merged: list = []
+    seen: set = set()
+    for group in groups:
+        if not group:
+            continue
+        for item in group:
+            if item in seen:
+                continue
+            seen.add(item)
+            merged.append(item)
+    return merged or None
+
+
+@router.get(
+    "",
+    response_model=ListingSearchResponse,
+    summary="Search published listings",
+    description=(
+        "Buyer map search. Draft and suspended listings are never returned. "
+        "Filters AND across types and OR within multi-selects. Canonical query "
+        "names are preserved; aliases (category, lat/lng/radius, price_min/max, "
+        "date_from/to, booking_type, sort) are also accepted."
+    ),
+)
 async def search_listings(
     min_lng: float | None = Query(default=None),
     min_lat: float | None = Query(default=None),
@@ -64,29 +113,53 @@ async def search_listings(
     available_to: date | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=20),
+    # Additive aliases — do not replace canonical names above
+    category: list[Category] | None = Query(default=None),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lng: float | None = Query(default=None, ge=-180, le=180),
+    radius: float | None = Query(default=None, gt=0),
+    price_min: int | None = Query(default=None, ge=0),
+    price_max: int | None = Query(default=None, ge=0),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    booking_type: list[str] | None = Query(default=None),
+    sort: str | None = Query(
+        default=None,
+        description="newest | price_asc | price_desc | cis_asc | cis_desc | distance",
+    ),
 ) -> ListingSearchResponse:
     """Buyer map search — public. Draft/suspended never returned."""
-    items, total = listing_service.search_listings(
-        min_lng=min_lng,
-        min_lat=min_lat,
-        max_lng=max_lng,
-        max_lat=max_lat,
-        center_lng=center_lng,
-        center_lat=center_lat,
-        radius_km=radius_km,
-        categories=categories,
-        audience_tags=audience,
-        booking_types=booking_types,
-        price_min_pence=price_min_pence,
-        price_max_pence=price_max_pence,
-        cis_min=cis_min,
-        cis_max=cis_max,
-        include_new_cis=include_new_cis,
-        available_from=available_from,
-        available_to=available_to,
-        page=page,
-        page_size=page_size,
-    )
+    try:
+        items, total = listing_service.search_listings(
+            min_lng=min_lng,
+            min_lat=min_lat,
+            max_lng=max_lng,
+            max_lat=max_lat,
+            center_lng=center_lng if center_lng is not None else lng,
+            center_lat=center_lat if center_lat is not None else lat,
+            radius_km=radius_km if radius_km is not None else radius,
+            categories=_merge_list(categories, category),
+            audience_tags=audience,
+            booking_types=_merge_list(booking_types, booking_type),
+            price_min_pence=(
+                price_min_pence if price_min_pence is not None else price_min
+            ),
+            price_max_pence=(
+                price_max_pence if price_max_pence is not None else price_max
+            ),
+            cis_min=cis_min,
+            cis_max=cis_max,
+            include_new_cis=include_new_cis,
+            available_from=(
+                available_from if available_from is not None else date_from
+            ),
+            available_to=available_to if available_to is not None else date_to,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        )
+    except ListingServiceError as exc:
+        raise _http_for_listing_error(exc) from exc
     return ListingSearchResponse(
         items=[_to_response(i) for i in items],
         total=total,
@@ -95,14 +168,46 @@ async def search_listings(
     )
 
 
-@router.get("/{listing_id}", response_model=ListingResponse)
-async def get_listing(listing_id: str) -> ListingResponse:
-    listing = store.get_listing(listing_id)
-    if not listing:
-        raise HTTPException(status_code=404, detail="Listing not found")
-    # Public detail: hide drafts/suspended from anonymous/buyer-facing path
-    if listing.status != ListingStatus.PUBLISHED:
-        raise HTTPException(status_code=404, detail="Listing not found")
+@router.get(
+    "/mine",
+    response_model=ListingSearchResponse,
+    summary="List the authenticated seller's listings",
+    description=(
+        "Seller inventory including draft and suspended rows. "
+        "Must be declared before /{listing_id} so 'mine' is not treated as an id."
+    ),
+)
+async def list_my_listings(
+    user: CurrentUser = Depends(require_role(UserRole.SELLER)),
+) -> ListingSearchResponse:
+    items = listing_service.list_seller_listings(user.id)
+    return ListingSearchResponse(
+        items=[_to_response(i) for i in items],
+        total=len(items),
+        page=1,
+        page_size=len(items),
+    )
+
+
+@router.get(
+    "/{listing_id}",
+    response_model=ListingResponse,
+    summary="Get a listing",
+    description=(
+        "Public detail returns published listings only. Draft and suspended "
+        "listings 404 for buyers; the owning seller may still retrieve them."
+    ),
+)
+async def get_listing(
+    listing_id: str,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+) -> ListingResponse:
+    try:
+        listing = listing_service.get_listing_for_viewer(
+            listing_id, _requester_id(credentials)
+        )
+    except ListingServiceError as exc:
+        raise _http_for_listing_error(exc) from exc
     return _to_response(listing)
 
 
@@ -110,6 +215,8 @@ async def get_listing(listing_id: str) -> ListingResponse:
     "",
     response_model=ListingResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Create a listing draft",
+    description="Seller-only. New listings start as draft until publish succeeds.",
 )
 async def create_listing(
     body: ListingCreate,
@@ -121,7 +228,12 @@ async def create_listing(
     return _to_response(listing)
 
 
-@router.patch("/{listing_id}", response_model=ListingResponse)
+@router.patch(
+    "/{listing_id}",
+    response_model=ListingResponse,
+    summary="Update a listing draft",
+    description="Seller-only. Ownership is required. Suspended listings cannot be edited.",
+)
 async def update_listing(
     listing_id: str,
     body: ListingUpdate,
@@ -132,11 +244,19 @@ async def update_listing(
             listing_id, user.id, body.model_dump(exclude_unset=True)
         )
     except ListingServiceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_for_listing_error(exc) from exc
     return _to_response(listing)
 
 
-@router.post("/{listing_id}/publish", response_model=PublishListingResponse)
+@router.post(
+    "/{listing_id}/publish",
+    response_model=PublishListingResponse,
+    summary="Publish a listing",
+    description=(
+        "Seller-only publish guard: connected Stripe account with charges enabled, "
+        "required fields complete, and at least one image. Ownership is required."
+    ),
+)
 async def publish_listing(
     listing_id: str,
     user: CurrentUser = Depends(require_role(UserRole.SELLER)),
@@ -144,7 +264,7 @@ async def publish_listing(
     try:
         listing = listing_service.publish_listing(listing_id, user.id)
     except ListingServiceError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise _http_for_listing_error(exc) from exc
     return PublishListingResponse(
         id=listing.id,
         status=listing.status,

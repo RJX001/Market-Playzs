@@ -32,6 +32,9 @@ export function OpenDisputesPanel({ disputes }: OpenDisputesPanelProps) {
             <p className="mt-1 text-[14px] text-[#F5F6F8]">{dispute.reason}</p>
             <p className="mt-1.5 text-[12.5px] text-[#9AA3B2]">
               {dispute.listingTitle} · {dispute.buyerName} ↔ {dispute.sellerName}
+              {dispute.firstDecisionDueAt
+                ? ` · SLA ${new Date(dispute.firstDecisionDueAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`
+                : ""}
             </p>
           </div>
           <span className="inline-flex shrink-0 items-center rounded-[20px] border border-[#5C4013] bg-[#2E2409] px-2.5 py-1 text-[11.5px] font-medium text-[#F5A623]">

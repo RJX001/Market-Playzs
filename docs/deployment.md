@@ -91,6 +91,10 @@ CORS_ORIGINS=
 
 Never commit real `.env` / `.env.local`. Never expose Stripe secret keys, Supabase service role, or Mapbox secret token to the Next.js client bundle.
 
+## Backups and restore
+
+Confirm **daily backups** are enabled on the production Supabase project (Dashboard → Database → Backups; PITR on paid plans). Snapshots are the source of truth for Postgres data — Vercel deploys are not a data backup. To restore: choose a snapshot in the Supabase dashboard, restore to a new project (preferred) or overwrite after a written freeze, then point production `DATABASE_URL` / `SUPABASE_*` at the restored instance and reconcile Stripe/webhook events that landed after the snapshot timestamp before reopening traffic.
+
 ---
 
 ## Vercel Cron stubs

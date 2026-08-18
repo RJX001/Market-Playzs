@@ -39,6 +39,61 @@ const STUB_NOTIFICATIONS: NotificationItem[] = [
   },
 ];
 
+function apiUrl(path: string): string {
+  const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+  return `${base}${path}`;
+}
+
+function authHeaders(): Headers {
+  const headers = new Headers();
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("mp_access_token");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+  headers.set("Content-Type", "application/json");
+  return headers;
+}
+
+function relativeFrom(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const delta = Date.now() - d.getTime();
+  const mins = Math.max(0, Math.floor(delta / 60_000));
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  if (hours < 48) return "Yesterday";
+  return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function mapNotifications(raw: unknown): NotificationItem[] {
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object"
+      ? ((raw as { items?: unknown; notifications?: unknown }).items ??
+        (raw as { notifications?: unknown }).notifications ??
+        [])
+      : [];
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => {
+    const rec = (item ?? {}) as Record<string, unknown>;
+    const created = String(rec.created_at ?? rec.createdAt ?? rec.relative_time ?? "");
+    const unread =
+      typeof rec.unread === "boolean"
+        ? rec.unread
+        : rec.read === false || rec.is_read === false;
+    return {
+      id: String(rec.id ?? ""),
+      message: String(rec.message ?? rec.body ?? rec.title ?? ""),
+      relativeTime:
+        typeof rec.relative_time === "string"
+          ? rec.relative_time
+          : relativeFrom(created),
+      unread,
+    };
+  });
+}
+
 /**
  * Bell + unread badge + notifications dropdown (Sections 4 & 13).
  * Opening the panel marks all as read (local UI state only).
@@ -53,6 +108,27 @@ export function NotificationPanel({
   const rootRef = useRef<HTMLDivElement>(null);
 
   const unreadCount = notifications.filter((n) => n.unread).length;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(apiUrl("/api/notifications"), {
+          headers: authHeaders(),
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const data: unknown = await res.json();
+        const mapped = mapNotifications(data);
+        if (!cancelled) setNotifications(mapped);
+      } catch {
+        /* keep stubs */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -76,11 +152,19 @@ export function NotificationPanel({
   }, [open]);
 
   function toggleOpen() {
-    // Opening marks all read (badge clears) — Section 13 product choice for stub UI.
     if (!open) {
+      const ids = notifications.filter((n) => n.unread).map((n) => n.id);
       setNotifications((prev) =>
         prev.map((n) => (n.unread ? { ...n, unread: false } : n)),
       );
+      void fetch(apiUrl("/api/notifications/mark-read"), {
+        method: "POST",
+        headers: authHeaders(),
+        credentials: "include",
+        body: JSON.stringify({ ids }),
+      }).catch(() => {
+        /* ignore mark-read failures */
+      });
     }
     setOpen((wasOpen) => !wasOpen);
   }
